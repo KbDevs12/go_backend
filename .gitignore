@@ -1,0 +1,7 @@
+# Firebase configuration file
+# This file is used to configure Firebase CLI behavior and settings for your project.
+# You can specify which files and directories to ignore when deploying to Firebase Hosting or Cloud Functions.
+# Ignore the following files and directories:
+.env
+*.log
+firebase.json
