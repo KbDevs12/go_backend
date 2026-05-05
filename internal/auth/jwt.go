@@ -20,7 +20,7 @@ type Claims struct {
 
 func GenerateToken(userID, fireUID, email, role string) (string, error) {
 	now := time.Now()
-	expiry := now.Add(time.Duration(config.App.JWTExpirationHours) * time.Hour)
+	expiry := now.Add(time.Duration(config.App.JWTExpiryHours) * time.Hour)
 
 	claims := Claims{
 		UserID:   userID,

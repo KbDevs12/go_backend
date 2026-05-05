@@ -3,6 +3,8 @@ package response
 import (
 	"encoding/json"
 	"net/http"
+
+	"github.com/gin-gonic/gin"
 )
 
 type APIResponse struct {
@@ -35,34 +37,34 @@ func JSON(w http.ResponseWriter, statusCode int, success bool, message string, d
 	})
 }
 
-func OK(w http.ResponseWriter, message string, data interface{}) {
-	JSON(w, http.StatusOK, true, message, data)
+func OK(c *gin.Context, message string, data interface{}) {
+	c.JSON(http.StatusOK, APIResponse{Success: true, Message: message, Data: data})
 }
 
-func Created(w http.ResponseWriter, message string, data interface{}) {
-	JSON(w, http.StatusCreated, true, message, data)
+func Created(c *gin.Context, message string, data interface{}) {
+	c.JSON(http.StatusCreated, APIResponse{Success: true, Message: message, Data: data})
 }
 
-func BadRequest(w http.ResponseWriter, message string) {
-	JSON(w, http.StatusBadRequest, false, message, nil)
+func BadRequest(c *gin.Context, message string) {
+	c.JSON(http.StatusBadRequest, APIResponse{Success: false, Message: message, Data: nil})
 }
 
-func Unauthorized(w http.ResponseWriter, message string) {
-	JSON(w, http.StatusUnauthorized, false, message, nil)
+func Unauthorized(c *gin.Context, message string) {
+	c.JSON(http.StatusUnauthorized, APIResponse{Success: false, Message: message, Data: nil})
 }
 
-func Forbidden(w http.ResponseWriter, message string) {
-	JSON(w, http.StatusForbidden, false, message, nil)
+func Forbidden(c *gin.Context, message string) {
+	c.JSON(http.StatusForbidden, APIResponse{Success: false, Message: message, Data: nil})
 }
 
-func NotFound(w http.ResponseWriter, message string) {
-	JSON(w, http.StatusNotFound, false, message, nil)
+func NotFound(c *gin.Context, message string) {
+	c.JSON(http.StatusNotFound, APIResponse{Success: false, Message: message, Data: nil})
 }
 
-func InternalError(w http.ResponseWriter, message string) {
-	JSON(w, http.StatusInternalServerError, false, message, nil)
+func InternalError(c *gin.Context, message string) {
+	c.JSON(http.StatusInternalServerError, APIResponse{Success: false, Message: message, Data: nil})
 }
 
-func Conflict(w http.ResponseWriter, message string) {
-	JSON(w, http.StatusConflict, false, message, nil)
+func Conflict(c *gin.Context, message string) {
+	c.JSON(http.StatusConflict, APIResponse{Success: false, Message: message, Data: nil})
 }

@@ -14,7 +14,7 @@ import (
 var AuthClient *auth.Client
 
 func Init() {
-	opt := option.WithCredentialsFile(config.App.FirebaseCredentialsPath)
+	opt := option.WithCredentialsFile(config.App.FirebaseCredPath)
 	app, err := firebase.NewApp(context.Background(), nil, opt)
 	if err != nil {
 		log.Fatalf("[Firebase] Failed to initialize Firebase app: %v", err)

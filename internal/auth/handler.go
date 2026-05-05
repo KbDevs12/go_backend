@@ -2,17 +2,19 @@ package auth
 
 import (
 	"context"
-	"encoding/json"
 	"net/http"
 	"time"
 
+	"backend/internal/config"
 	"backend/internal/database"
 	"backend/pkg/firebase"
 	"backend/pkg/response"
+
+	"github.com/gin-gonic/gin"
 )
 
 type LoginRequest struct {
-	FirebaseIDToken string `json:"firebase_id_token"`
+	FirebaseIDToken string `json:"firebase_id_token" binding:"required"`
 }
 
 type LoginResponse struct {
@@ -26,53 +28,53 @@ type LoginResponse struct {
 	Role                 string `json:"role"`
 }
 
-func Login(w http.ResponseWriter, r *http.Request) {
+// Login godoc
+// POST /api/v1/auth/login
+func Login(c *gin.Context) {
 	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		response.BadRequest(w, "invalid request body")
-		return
-	}
-	if req.FirebaseIDToken == "" {
-		response.BadRequest(w, "firebase_id_token is required")
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "firebase_id_token is required")
 		return
 	}
 
-	ctx := r.Context()
+	ctx := c.Request.Context()
 
 	fireToken, err := firebase.VerifyIDToken(ctx, req.FirebaseIDToken)
 	if err != nil {
-		response.Unauthorized(w, "invalid or expired firebase token")
+		response.Unauthorized(c, "invalid or expired firebase token")
 		return
 	}
 
 	fireUser, err := firebase.GetUser(ctx, fireToken.UID)
 	if err != nil {
-		response.InternalError(w, "failed to fetch firebase user")
+		response.InternalError(c, "failed to fetch firebase user")
 		return
 	}
 	if !fireUser.EmailVerified {
-		response.Forbidden(w, "email not verified — please verify your email before logging in")
+		c.JSON(http.StatusForbidden, gin.H{
+			"success": false,
+			"message": "email not verified — please verify your email before logging in",
+		})
 		return
 	}
 
 	userID, role, displayName, err := upsertUser(ctx, fireUser.UID, fireUser.Email, fireUser.DisplayName)
 	if err != nil {
-		response.InternalError(w, "failed to process user account")
+		response.InternalError(c, "failed to process user account")
 		return
 	}
 
-	from, _ := GetConfig()
 	token, err := GenerateToken(userID, fireUser.UID, fireUser.Email, role)
 	if err != nil {
-		response.InternalError(w, "failed to generate token")
+		response.InternalError(c, "failed to generate token")
 		return
 	}
 
-	response.OK(w, "login successful", LoginResponse{
+	response.OK(c, "login successful", LoginResponse{
 		AccessToken:          token,
 		TokenType:            "Bearer",
-		ExpiresIn:            from.JWTExpiryHours * 3600,
-		InactivityLogoutDays: from.InactivityLogoutDays,
+		ExpiresIn:            config.App.JWTExpiryHours * 3600,
+		InactivityLogoutDays: config.App.InactivityLogoutDays,
 		UserID:               userID,
 		Email:                fireUser.Email,
 		DisplayName:          displayName,
@@ -94,43 +96,115 @@ func upsertUser(ctx context.Context, fireUID, email, displayName string) (string
 	err := database.Pool.QueryRow(ctx, query, fireUID, email, displayName).Scan(&userID, &role, &name)
 	return userID, role, name, err
 }
-func GetConfig() (*authConfig, error) {
-	return &authConfig{
-		JWTExpiryHours:       24,
-		InactivityLogoutDays: 30,
-	}, nil
-}
 
-type authConfig struct {
-	JWTExpiryHours       int
-	InactivityLogoutDays int
-}
-
-func RefreshLastSeen(w http.ResponseWriter, r *http.Request) {
-
-	claims, ok := r.Context().Value(ClaimsKey{}).(*Claims)
+// RefreshLastSeen godoc
+// POST /api/v1/auth/refresh
+func RefreshLastSeen(c *gin.Context) {
+	claims, ok := c.MustGet("claims").(*Claims)
 	if !ok {
-		response.Unauthorized(w, "missing auth context")
+		response.Unauthorized(c, "missing auth context")
 		return
 	}
 
-	_, err := database.Pool.Exec(r.Context(),
+	_, err := database.Pool.Exec(c.Request.Context(),
 		`UPDATE users SET last_activity_at = NOW() WHERE id = $1`, claims.UserID)
 	if err != nil {
-		response.InternalError(w, "failed to update activity")
+		response.InternalError(c, "failed to update activity")
 		return
 	}
 
 	token, err := GenerateToken(claims.UserID, claims.FireUID, claims.Email, claims.Role)
 	if err != nil {
-		response.InternalError(w, "failed to refresh token")
+		response.InternalError(c, "failed to refresh token")
 		return
 	}
 
-	response.OK(w, "token refreshed", map[string]interface{}{
+	response.OK(c, "token refreshed", gin.H{
 		"access_token":           token,
 		"token_type":             "Bearer",
 		"last_activity_at":       time.Now().UTC(),
-		"inactivity_logout_days": 30,
+		"inactivity_logout_days": config.App.InactivityLogoutDays,
+	})
+}
+
+// AdminLoginRequest untuk panel web admin — menerima email + password
+// lalu diverifikasi ke Firebase melalui REST API Firebase Auth.
+type AdminLoginRequest struct {
+	Email    string `json:"email"    binding:"required,email"`
+	Password string `json:"password" binding:"required"`
+}
+
+// AdminLogin godoc
+// POST /api/v1/auth/admin-login
+// Digunakan khusus oleh React Admin panel.
+// Backend verifikasi email+password ke Firebase REST API,
+// lalu cek role = 'admin' sebelum menerbitkan Bearer token.
+func AdminLogin(c *gin.Context) {
+	var req AdminLoginRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "email dan password wajib diisi")
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	// Verifikasi email+password ke Firebase Auth REST API
+	firebaseAPIKey := config.App.FirebaseWebAPIKey
+	if firebaseAPIKey == "" {
+		response.InternalError(c, "Firebase Web API Key belum dikonfigurasi")
+		return
+	}
+
+	fireIDToken, err := signInWithEmailPassword(ctx, firebaseAPIKey, req.Email, req.Password)
+	if err != nil {
+		response.Unauthorized(c, "email atau password salah")
+		return
+	}
+
+	// Verifikasi token & ambil data user
+	fireToken, err := firebase.VerifyIDToken(ctx, fireIDToken)
+	if err != nil {
+		response.Unauthorized(c, "verifikasi token gagal")
+		return
+	}
+
+	fireUser, err := firebase.GetUser(ctx, fireToken.UID)
+	if err != nil {
+		response.InternalError(c, "gagal mengambil data user")
+		return
+	}
+
+	if !fireUser.EmailVerified {
+		c.JSON(403, gin.H{"success": false, "message": "email belum diverifikasi"})
+		return
+	}
+
+	// Cek role di database
+	userID, role, displayName, err := upsertUser(ctx, fireUser.UID, fireUser.Email, fireUser.DisplayName)
+	if err != nil {
+		response.InternalError(c, "gagal memproses akun")
+		return
+	}
+
+	if role != "admin" {
+		c.JSON(403, gin.H{"success": false, "message": "akun ini bukan admin"})
+		return
+	}
+
+	token, err := GenerateToken(userID, fireUser.UID, fireUser.Email, role)
+	if err != nil {
+		response.InternalError(c, "gagal membuat token")
+		return
+	}
+
+	response.OK(c, "login admin berhasil", LoginResponse{
+		AccessToken:          token,
+		TokenType:            "Bearer",
+		ExpiresIn:            config.App.JWTExpiryHours * 3600,
+		InactivityLogoutDays: config.App.InactivityLogoutDays,
+		UserID:               userID,
+		Email:                fireUser.Email,
+		DisplayName:          displayName,
+		Role:                 role,
 	})
 }

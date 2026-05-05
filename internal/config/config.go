@@ -9,34 +9,36 @@ import (
 )
 
 type Config struct {
-	ServerPort              string
-	AppEnv                  string
-	JWTSecret               string
-	JWTExpirationHours      int
-	InactivtyLogoutDays     int
-	DatabaseURL             string
-	FirebaseCredentialsPath string
-	FirebaseProjectID       string
-	QRISStatic              string
+	ServerPort           string
+	AppEnv               string
+	JWTSecret            string
+	JWTExpiryHours       int
+	InactivityLogoutDays int
+	DatabaseURL          string
+	FirebaseCredPath     string
+	FirebaseProjectID    string
+	FirebaseWebAPIKey    string
+	QRISStatic           string
 }
 
 var App *Config
 
-func load() {
+func Load() {
 	if err := godotenv.Load(); err != nil {
-		log.Println("[Config] .env not found, using system environment variables")
+		log.Println("[config] .env not found, using system environment variables")
 	}
 
 	App = &Config{
-		ServerPort:              getEnv("SERVER_PORT", "8080"),
-		AppEnv:                  getEnv("APP_ENV", "development"),
-		JWTSecret:               getEnv("JWT_SECRET", "change-me"),
-		JWTExpirationHours:      getEnvInt("JWT_EXPIRY_HOURS", 24),
-		InactivtyLogoutDays:     getEnvInt("INACTIVITY_LOGOUT_DAYS", 30),
-		DatabaseURL:             getEnv("DATABASE_URL", ""),
-		FirebaseCredentialsPath: getEnv("FIREBASE_CREDENTIALS_PATH", "./firebase-service-account.json"),
-		FirebaseProjectID:       getEnv("FIREBASE_PROJECT_ID", ""),
-		QRISStatic:              getEnv("QRIS_STATIC", ""),
+		ServerPort:           getEnv("SERVER_PORT", "8080"),
+		AppEnv:               getEnv("APP_ENV", "development"),
+		JWTSecret:            getEnv("JWT_SECRET", "change-me"),
+		JWTExpiryHours:       getEnvInt("JWT_EXPIRY_HOURS", 24),
+		InactivityLogoutDays: getEnvInt("INACTIVITY_LOGOUT_DAYS", 30),
+		DatabaseURL:          getEnv("DATABASE_URL", ""),
+		FirebaseCredPath:     getEnv("FIREBASE_CREDENTIALS_PATH", "./firebase-service-account.json"),
+		FirebaseProjectID:    getEnv("FIREBASE_PROJECT_ID", ""),
+		FirebaseWebAPIKey:    getEnv("FIREBASE_WEB_API_KEY", ""),
+		QRISStatic:           getEnv("QRIS_STATIC", ""),
 	}
 }
 
