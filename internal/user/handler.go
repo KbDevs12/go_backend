@@ -11,15 +11,14 @@ import (
 )
 
 type User struct {
-	ID             string     `json:"id"`
-	FirebaseUID    string     `json:"firebase_uid"`
-	Email          string     `json:"email"`
-	DisplayName    string     `json:"display_name"`
-	PhoneNumber    string     `json:"phone_number,omitempty"`
-	Role           string     `json:"role"`
-	LastLoginAt    *time.Time `json:"last_login_at,omitempty"`
-	LastActivityAt *time.Time `json:"last_activity_at,omitempty"`
-	CreatedAt      time.Time  `json:"created_at"`
+	ID            string     `json:"id"`
+	FirebaseUID   string     `json:"firebase_uid"`
+	Name          string     `json:"name"`
+	Email         string     `json:"email"`
+	Phone         string     `json:"phone,omitempty"`
+	EmailVerified bool       `json:"email_verified"`
+	LastLoginAt   *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // GetProfile godoc
@@ -32,23 +31,25 @@ func GetProfile(c *gin.Context) {
 	}
 
 	var u User
-	err := database.Pool.QueryRow(c.Request.Context(),
-		`SELECT id, firebase_uid, email, display_name, COALESCE(phone_number,''), role,
-		        last_login_at, last_activity_at, created_at
-		 FROM users WHERE id = $1`, claims.UserID,
-	).Scan(&u.ID, &u.FirebaseUID, &u.Email, &u.DisplayName, &u.PhoneNumber,
-		&u.Role, &u.LastLoginAt, &u.LastActivityAt, &u.CreatedAt)
+	err := database.Pool.QueryRow(c.Request.Context(), `
+		SELECT id, firebase_uid, name, email, COALESCE(phone,''),
+		       email_verified, last_login_at, created_at
+		FROM users WHERE id = $1
+	`, claims.UserID).Scan(
+		&u.ID, &u.FirebaseUID, &u.Name, &u.Email, &u.Phone,
+		&u.EmailVerified, &u.LastLoginAt, &u.CreatedAt,
+	)
 	if err != nil {
-		response.NotFound(c, "user not found")
+		response.NotFound(c, "pengguna tidak ditemukan")
 		return
 	}
 
-	response.OK(c, "profile retrieved", u)
+	response.OK(c, "profil berhasil diambil", u)
 }
 
 type UpdateProfileRequest struct {
-	DisplayName string `json:"display_name"`
-	PhoneNumber string `json:"phone_number"`
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
 }
 
 // UpdateProfile godoc
@@ -62,17 +63,68 @@ func UpdateProfile(c *gin.Context) {
 
 	var req UpdateProfileRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "invalid request body")
+		response.BadRequest(c, "request tidak valid")
 		return
 	}
 
 	_, err := database.Pool.Exec(c.Request.Context(),
-		`UPDATE users SET display_name = $1, phone_number = $2 WHERE id = $3`,
-		req.DisplayName, req.PhoneNumber, claims.UserID)
+		`UPDATE users SET name = $1, phone = $2 WHERE id = $3`,
+		req.Name, req.Phone, claims.UserID)
 	if err != nil {
-		response.InternalError(c, "failed to update profile")
+		response.InternalError(c, "gagal memperbarui profil")
 		return
 	}
 
-	response.OK(c, "profile updated", nil)
+	response.OK(c, "profil berhasil diperbarui", nil)
+}
+
+// GetNotifications godoc
+// GET /api/v1/user/notifications
+func GetNotifications(c *gin.Context) {
+	claims, ok := c.MustGet("claims").(*auth.Claims)
+	if !ok {
+		response.Unauthorized(c, "unauthorized")
+		return
+	}
+
+	type Notif struct {
+		ID        string    `json:"id"`
+		BookingID *string   `json:"booking_id,omitempty"`
+		Message   string    `json:"message"`
+		Type      string    `json:"type"`
+		IsRead    bool      `json:"is_read"`
+		CreatedAt time.Time `json:"created_at"`
+	}
+
+	rows, err := database.Pool.Query(c.Request.Context(), `
+		SELECT id, booking_id, message, type, is_read, created_at
+		FROM notifications
+		WHERE user_id = $1
+		ORDER BY created_at DESC
+		LIMIT 30
+	`, claims.UserID)
+	if err != nil {
+		response.InternalError(c, "gagal mengambil notifikasi")
+		return
+	}
+	defer rows.Close()
+
+	var notifs []Notif
+	for rows.Next() {
+		var n Notif
+		if err := rows.Scan(&n.ID, &n.BookingID, &n.Message, &n.Type, &n.IsRead, &n.CreatedAt); err != nil {
+			continue
+		}
+		notifs = append(notifs, n)
+	}
+
+	if notifs == nil {
+		notifs = []Notif{}
+	}
+
+	_, _ = database.Pool.Exec(c.Request.Context(),
+		`UPDATE notifications SET is_read = true WHERE user_id = $1 AND is_read = false`,
+		claims.UserID)
+
+	response.OK(c, "notifikasi berhasil diambil", notifs)
 }

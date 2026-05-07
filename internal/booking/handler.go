@@ -1,6 +1,7 @@
 package booking
 
 import (
+	"fmt"
 	"time"
 
 	"backend/internal/auth"
@@ -29,16 +30,15 @@ type Booking struct {
 	DurationHrs float64    `json:"duration_hrs"`
 	TotalPrice  int64      `json:"total_price"`
 	Status      string     `json:"status"`
-	QRISPayload string     `json:"qris_payload,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   *time.Time `json:"updated_at,omitempty"`
 }
 
 type CreateBookingRequest struct {
-	FieldID   string `json:"field_id"   binding:"required"`
-	Date      string `json:"date"        binding:"required"`
-	StartTime string `json:"start_time"  binding:"required"`
-	EndTime   string `json:"end_time"    binding:"required"`
+	FieldID   string `json:"field_id"  binding:"required"`
+	Date      string `json:"date"       binding:"required"`
+	StartTime string `json:"start_time" binding:"required"`
+	EndTime   string `json:"end_time"   binding:"required"`
 }
 
 // Create godoc
@@ -52,7 +52,7 @@ func Create(c *gin.Context) {
 
 	var req CreateBookingRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "field_id, date, start_time, end_time are required")
+		response.BadRequest(c, "field_id, date, start_time, end_time wajib diisi")
 		return
 	}
 
@@ -61,24 +61,34 @@ func Create(c *gin.Context) {
 	var pricePerHour int64
 	var fieldName string
 	err := database.Pool.QueryRow(ctx,
-		`SELECT name, price_per_hour FROM fields WHERE id = $1 AND is_active = true`,
+		`SELECT name, price_per_hour FROM fields WHERE id = $1 AND is_available = true`,
 		req.FieldID,
 	).Scan(&fieldName, &pricePerHour)
 	if err != nil {
-		response.NotFound(c, "field not found or inactive")
+		response.NotFound(c, "lapangan tidak ditemukan atau tidak tersedia")
+		return
+	}
+
+	var isClosed bool
+	_ = database.Pool.QueryRow(ctx,
+		`SELECT COALESCE(is_closed, false) FROM schedules WHERE field_id = $1 AND date = $2`,
+		req.FieldID, req.Date,
+	).Scan(&isClosed)
+	if isClosed {
+		response.BadRequest(c, "lapangan tutup pada tanggal tersebut")
 		return
 	}
 
 	var conflictCount int
 	_ = database.Pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM bookings
-		WHERE field_id   = $1
-		  AND date       = $2
-		  AND status NOT IN ('cancelled')
+		WHERE field_id  = $1
+		  AND date      = $2
+		  AND status   NOT IN ('cancelled')
 		  AND (start_time, end_time) OVERLAPS ($3::time, $4::time)
 	`, req.FieldID, req.Date, req.StartTime, req.EndTime).Scan(&conflictCount)
 	if conflictCount > 0 {
-		response.Conflict(c, "the selected time slot is not available")
+		response.Conflict(c, "slot waktu yang dipilih sudah tidak tersedia")
 		return
 	}
 
@@ -87,22 +97,33 @@ func Create(c *gin.Context) {
 	end, _ := time.Parse(layout, req.EndTime)
 	durationHrs := end.Sub(start).Hours()
 	if durationHrs <= 0 {
-		response.BadRequest(c, "end_time must be after start_time")
+		response.BadRequest(c, "end_time harus setelah start_time")
 		return
 	}
 	totalPrice := int64(durationHrs * float64(pricePerHour))
 
 	bookingID := uuid.NewString()
 	_, err = database.Pool.Exec(ctx, `
-		INSERT INTO bookings (id, user_id, field_id, date, start_time, end_time, duration_hrs, total_price, status, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
-	`, bookingID, claims.UserID, req.FieldID, req.Date, req.StartTime, req.EndTime, durationHrs, totalPrice, StatusPendingPayment)
+		INSERT INTO bookings
+		  (id, user_id, field_id, date, start_time, end_time, duration_hrs, status, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+	`, bookingID, claims.UserID, req.FieldID, req.Date,
+		req.StartTime, req.EndTime, durationHrs, StatusPendingPayment)
 	if err != nil {
-		response.InternalError(c, "failed to create booking")
+		response.InternalError(c, "gagal menyimpan pemesanan")
 		return
 	}
 
-	response.Created(c, "booking created — proceed to payment", Booking{
+	_, err = database.Pool.Exec(ctx, `
+		INSERT INTO payments (id, booking_id, amount, qr_type, status, created_at)
+		VALUES (gen_random_uuid(), $1, $2, 'dynamic', 'pending', NOW())
+	`, bookingID, totalPrice)
+	if err != nil {
+		response.InternalError(c, "gagal membuat record pembayaran")
+		return
+	}
+
+	response.Created(c, fmt.Sprintf("pemesanan berhasil dibuat untuk %s", fieldName), Booking{
 		ID:          bookingID,
 		UserID:      claims.UserID,
 		FieldID:     req.FieldID,
@@ -126,15 +147,17 @@ func ListMine(c *gin.Context) {
 	}
 
 	rows, err := database.Pool.Query(c.Request.Context(), `
-		SELECT b.id, b.user_id, b.field_id, b.date::text, b.start_time::text, b.end_time::text,
-		       b.duration_hrs, b.total_price, b.status, b.created_at
+		SELECT b.id, b.user_id, b.field_id, b.date::text,
+		       b.start_time::text, b.end_time::text,
+		       b.duration_hrs, p.amount, b.status, b.created_at
 		FROM bookings b
+		JOIN payments p ON p.booking_id = b.id
 		WHERE b.user_id = $1
 		ORDER BY b.created_at DESC
 		LIMIT 50
 	`, claims.UserID)
 	if err != nil {
-		response.InternalError(c, "failed to fetch bookings")
+		response.InternalError(c, "gagal mengambil data pemesanan")
 		return
 	}
 	defer rows.Close()
@@ -142,14 +165,19 @@ func ListMine(c *gin.Context) {
 	var bookings []Booking
 	for rows.Next() {
 		var b Booking
-		if err := rows.Scan(&b.ID, &b.UserID, &b.FieldID, &b.Date, &b.StartTime, &b.EndTime,
-			&b.DurationHrs, &b.TotalPrice, &b.Status, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.UserID, &b.FieldID, &b.Date,
+			&b.StartTime, &b.EndTime, &b.DurationHrs, &b.TotalPrice,
+			&b.Status, &b.CreatedAt); err != nil {
 			continue
 		}
 		bookings = append(bookings, b)
 	}
 
-	response.OK(c, "bookings retrieved", bookings)
+	if bookings == nil {
+		bookings = []Booking{}
+	}
+
+	response.OK(c, "data pemesanan berhasil diambil", bookings)
 }
 
 // GetByID godoc
@@ -164,18 +192,22 @@ func GetByID(c *gin.Context) {
 	bookingID := c.Param("id")
 	var b Booking
 	err := database.Pool.QueryRow(c.Request.Context(), `
-		SELECT id, user_id, field_id, date::text, start_time::text, end_time::text,
-		       duration_hrs, total_price, status, created_at
-		FROM bookings WHERE id = $1 AND user_id = $2
+		SELECT b.id, b.user_id, b.field_id, b.date::text,
+		       b.start_time::text, b.end_time::text,
+		       b.duration_hrs, p.amount, b.status, b.created_at
+		FROM bookings b
+		JOIN payments p ON p.booking_id = b.id
+		WHERE b.id = $1 AND b.user_id = $2
 	`, bookingID, claims.UserID).Scan(
-		&b.ID, &b.UserID, &b.FieldID, &b.Date, &b.StartTime, &b.EndTime,
-		&b.DurationHrs, &b.TotalPrice, &b.Status, &b.CreatedAt)
+		&b.ID, &b.UserID, &b.FieldID, &b.Date,
+		&b.StartTime, &b.EndTime, &b.DurationHrs, &b.TotalPrice,
+		&b.Status, &b.CreatedAt)
 	if err != nil {
-		response.NotFound(c, "booking not found")
+		response.NotFound(c, "pemesanan tidak ditemukan")
 		return
 	}
 
-	response.OK(c, "booking retrieved", b)
+	response.OK(c, "detail pemesanan berhasil diambil", b)
 }
 
 // Cancel godoc
@@ -188,14 +220,20 @@ func Cancel(c *gin.Context) {
 	}
 
 	bookingID := c.Param("id")
+
 	result, err := database.Pool.Exec(c.Request.Context(), `
 		UPDATE bookings SET status = 'cancelled', updated_at = NOW()
 		WHERE id = $1 AND user_id = $2 AND status = 'pending_payment'
 	`, bookingID, claims.UserID)
 	if err != nil || result.RowsAffected() == 0 {
-		response.BadRequest(c, "booking cannot be cancelled (not found or already processed)")
+		response.BadRequest(c, "pemesanan tidak dapat dibatalkan (tidak ditemukan atau sudah diproses)")
 		return
 	}
 
-	response.OK(c, "booking cancelled", nil)
+	_, _ = database.Pool.Exec(c.Request.Context(), `
+		UPDATE payments SET status = 'rejected', updated_at = NOW()
+		WHERE booking_id = $1
+	`, bookingID)
+
+	response.OK(c, "pemesanan berhasil dibatalkan", nil)
 }

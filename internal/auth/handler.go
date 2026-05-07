@@ -24,7 +24,7 @@ type LoginResponse struct {
 	InactivityLogoutDays int    `json:"inactivity_logout_days"`
 	UserID               string `json:"user_id"`
 	Email                string `json:"email"`
-	DisplayName          string `json:"display_name"`
+	Name                 string `json:"name"`
 	Role                 string `json:"role"`
 }
 
@@ -33,7 +33,7 @@ type LoginResponse struct {
 func Login(c *gin.Context) {
 	var req LoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "firebase_id_token is required")
+		response.BadRequest(c, "firebase_id_token wajib diisi")
 		return
 	}
 
@@ -41,60 +41,62 @@ func Login(c *gin.Context) {
 
 	fireToken, err := firebase.VerifyIDToken(ctx, req.FirebaseIDToken)
 	if err != nil {
-		response.Unauthorized(c, "invalid or expired firebase token")
+		response.Unauthorized(c, "token Firebase tidak valid atau sudah kadaluarsa")
 		return
 	}
 
 	fireUser, err := firebase.GetUser(ctx, fireToken.UID)
 	if err != nil {
-		response.InternalError(c, "failed to fetch firebase user")
+		response.InternalError(c, "gagal mengambil data user dari Firebase")
 		return
 	}
 	if !fireUser.EmailVerified {
 		c.JSON(http.StatusForbidden, gin.H{
 			"success": false,
-			"message": "email not verified — please verify your email before logging in",
+			"message": "email belum diverifikasi — silakan cek inbox email kamu",
 		})
 		return
 	}
 
-	userID, role, displayName, err := upsertUser(ctx, fireUser.UID, fireUser.Email, fireUser.DisplayName)
+	userID, name, err := upsertUser(ctx, fireUser.UID, fireUser.Email, fireUser.DisplayName)
 	if err != nil {
-		response.InternalError(c, "failed to process user account")
+		response.InternalError(c, "gagal memproses akun pengguna")
 		return
 	}
 
-	token, err := GenerateToken(userID, fireUser.UID, fireUser.Email, role)
+	token, err := GenerateToken(userID, fireUser.UID, fireUser.Email, "customer")
 	if err != nil {
-		response.InternalError(c, "failed to generate token")
+		response.InternalError(c, "gagal membuat token")
 		return
 	}
 
-	response.OK(c, "login successful", LoginResponse{
+	response.OK(c, "login berhasil", LoginResponse{
 		AccessToken:          token,
 		TokenType:            "Bearer",
 		ExpiresIn:            config.App.JWTExpiryHours * 3600,
 		InactivityLogoutDays: config.App.InactivityLogoutDays,
 		UserID:               userID,
 		Email:                fireUser.Email,
-		DisplayName:          displayName,
-		Role:                 role,
+		Name:                 name,
+		Role:                 "customer",
 	})
 }
 
-func upsertUser(ctx context.Context, fireUID, email, displayName string) (string, string, string, error) {
+// upsertUser — sesuai tabel users di class diagram (name, email, phone, email_verified)
+func upsertUser(ctx context.Context, fireUID, email, name string) (string, string, error) {
 	const query = `
-		INSERT INTO users (firebase_uid, email, display_name, role, last_login_at, created_at)
-		VALUES ($1, $2, $3, 'customer', NOW(), NOW())
+		INSERT INTO users (firebase_uid, name, email, email_verified, last_login_at, created_at)
+		VALUES ($1, $2, $3, true, NOW(), NOW())
 		ON CONFLICT (firebase_uid) DO UPDATE
-		  SET last_login_at = NOW(),
-		      email         = EXCLUDED.email,
-		      display_name  = EXCLUDED.display_name
-		RETURNING id, role, display_name
+		  SET last_login_at  = NOW(),
+		      email          = EXCLUDED.email,
+		      name           = EXCLUDED.name,
+		      email_verified = true
+		RETURNING id, name
 	`
-	var userID, role, name string
-	err := database.Pool.QueryRow(ctx, query, fireUID, email, displayName).Scan(&userID, &role, &name)
-	return userID, role, name, err
+	var userID, userName string
+	err := database.Pool.QueryRow(ctx, query, fireUID, name, email).Scan(&userID, &userName)
+	return userID, userName, err
 }
 
 // RefreshLastSeen godoc
@@ -109,17 +111,17 @@ func RefreshLastSeen(c *gin.Context) {
 	_, err := database.Pool.Exec(c.Request.Context(),
 		`UPDATE users SET last_activity_at = NOW() WHERE id = $1`, claims.UserID)
 	if err != nil {
-		response.InternalError(c, "failed to update activity")
+		response.InternalError(c, "gagal memperbarui aktivitas")
 		return
 	}
 
 	token, err := GenerateToken(claims.UserID, claims.FireUID, claims.Email, claims.Role)
 	if err != nil {
-		response.InternalError(c, "failed to refresh token")
+		response.InternalError(c, "gagal memperbarui token")
 		return
 	}
 
-	response.OK(c, "token refreshed", gin.H{
+	response.OK(c, "token diperbarui", gin.H{
 		"access_token":           token,
 		"token_type":             "Bearer",
 		"last_activity_at":       time.Now().UTC(),
@@ -127,8 +129,7 @@ func RefreshLastSeen(c *gin.Context) {
 	})
 }
 
-// AdminLoginRequest untuk panel web admin — menerima email + password
-// lalu diverifikasi ke Firebase melalui REST API Firebase Auth.
+// AdminLoginRequest untuk panel web admin
 type AdminLoginRequest struct {
 	Email    string `json:"email"    binding:"required,email"`
 	Password string `json:"password" binding:"required"`
@@ -136,9 +137,6 @@ type AdminLoginRequest struct {
 
 // AdminLogin godoc
 // POST /api/v1/auth/admin-login
-// Digunakan khusus oleh React Admin panel.
-// Backend verifikasi email+password ke Firebase REST API,
-// lalu cek role = 'admin' sebelum menerbitkan Bearer token.
 func AdminLogin(c *gin.Context) {
 	var req AdminLoginRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -148,7 +146,6 @@ func AdminLogin(c *gin.Context) {
 
 	ctx := c.Request.Context()
 
-	// Verifikasi email+password ke Firebase Auth REST API
 	firebaseAPIKey := config.App.FirebaseWebAPIKey
 	if firebaseAPIKey == "" {
 		response.InternalError(c, "Firebase Web API Key belum dikonfigurasi")
@@ -161,7 +158,6 @@ func AdminLogin(c *gin.Context) {
 		return
 	}
 
-	// Verifikasi token & ambil data user
 	fireToken, err := firebase.VerifyIDToken(ctx, fireIDToken)
 	if err != nil {
 		response.Unauthorized(c, "verifikasi token gagal")
@@ -175,23 +171,24 @@ func AdminLogin(c *gin.Context) {
 	}
 
 	if !fireUser.EmailVerified {
-		c.JSON(403, gin.H{"success": false, "message": "email belum diverifikasi"})
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "email belum diverifikasi"})
 		return
 	}
 
-	// Cek role di database
-	userID, role, displayName, err := upsertUser(ctx, fireUser.UID, fireUser.Email, fireUser.DisplayName)
+	// Cek di tabel admins (tabel terpisah sesuai class diagram)
+	var adminID, adminName, role string
+	err = database.Pool.QueryRow(ctx,
+		`SELECT id, username, role FROM admins WHERE firebase_uid = $1`, fireToken.UID,
+	).Scan(&adminID, &adminName, &role)
 	if err != nil {
-		response.InternalError(c, "gagal memproses akun")
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "akun ini bukan admin"})
 		return
 	}
 
-	if role != "admin" {
-		c.JSON(403, gin.H{"success": false, "message": "akun ini bukan admin"})
-		return
-	}
+	// Update last_login_at di admins
+	_, _ = database.Pool.Exec(ctx, `UPDATE admins SET last_login_at = NOW() WHERE id = $1`, adminID)
 
-	token, err := GenerateToken(userID, fireUser.UID, fireUser.Email, role)
+	token, err := GenerateToken(adminID, fireToken.UID, req.Email, role)
 	if err != nil {
 		response.InternalError(c, "gagal membuat token")
 		return
@@ -202,9 +199,9 @@ func AdminLogin(c *gin.Context) {
 		TokenType:            "Bearer",
 		ExpiresIn:            config.App.JWTExpiryHours * 3600,
 		InactivityLogoutDays: config.App.InactivityLogoutDays,
-		UserID:               userID,
-		Email:                fireUser.Email,
-		DisplayName:          displayName,
+		UserID:               adminID,
+		Email:                req.Email,
+		Name:                 adminName,
 		Role:                 role,
 	})
 }

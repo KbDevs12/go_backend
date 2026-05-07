@@ -15,10 +15,13 @@ import (
 )
 
 type PaymentDetail struct {
-	BookingID   string    `json:"booking_id"`
-	TotalPrice  int64     `json:"total_price"`
-	QRISPayload string    `json:"qris_payload"`
-	ExpiredAt   time.Time `json:"expired_at"`
+	PaymentID string    `json:"payment_id"`
+	BookingID string    `json:"booking_id"`
+	Amount    int64     `json:"amount"`
+	QRCode    string    `json:"qr_code"`
+	QRType    string    `json:"qr_type"`
+	Status    string    `json:"status"`
+	ExpiredAt time.Time `json:"expired_at"`
 }
 
 // GetPaymentQR godoc
@@ -32,63 +35,106 @@ func GetPaymentQR(c *gin.Context) {
 
 	bookingID := c.Param("booking_id")
 
-	var totalPrice int64
+	var paymentID string
+	var amount int64
 	var status string
-	err := database.Pool.QueryRow(c.Request.Context(),
-		`SELECT total_price, status FROM bookings WHERE id = $1 AND user_id = $2`,
-		bookingID, claims.UserID,
-	).Scan(&totalPrice, &status)
+	var bookingUserID string
+
+	err := database.Pool.QueryRow(c.Request.Context(), `
+		SELECT p.id, p.amount, p.status, b.user_id
+		FROM payments p
+		JOIN bookings b ON b.id = p.booking_id
+		WHERE p.booking_id = $1
+	`, bookingID).Scan(&paymentID, &amount, &status, &bookingUserID)
 	if err != nil {
-		response.NotFound(c, "booking not found")
+		response.NotFound(c, "data pembayaran tidak ditemukan")
 		return
 	}
-	if status != "pending_payment" {
-		response.BadRequest(c, fmt.Sprintf("payment not required — booking status is '%s'", status))
+
+	if bookingUserID != claims.UserID {
+		response.Forbidden(c, "akses ditolak")
+		return
+	}
+
+	if status != "pending" {
+		response.BadRequest(c, fmt.Sprintf("pembayaran tidak diperlukan — status saat ini: '%s'", status))
 		return
 	}
 
 	staticQRIS := config.App.QRISStatic
 	if staticQRIS == "" {
-		response.InternalError(c, "QRIS not configured — contact administrator")
+		response.InternalError(c, "QRIS belum dikonfigurasi — hubungi administrator")
 		return
 	}
 
-	dynamicQRIS := qris.ConvertToDynamic(staticQRIS, fmt.Sprintf("%d", totalPrice))
+	dynamicQRIS := qris.ConvertToDynamic(staticQRIS, fmt.Sprintf("%d", amount))
 	if dynamicQRIS == "" {
-		response.InternalError(c, "failed to generate dynamic QRIS")
+		response.InternalError(c, "gagal membuat QR Code dinamis")
 		return
 	}
 
-	_, _ = database.Pool.Exec(c.Request.Context(),
-		`UPDATE bookings SET qris_payload = $1, payment_requested_at = NOW() WHERE id = $2`,
-		dynamicQRIS, bookingID)
+	_, _ = database.Pool.Exec(c.Request.Context(), `
+		UPDATE payments
+		   SET qr_code = $1, qr_type = 'dynamic', qr_generated_at = NOW(), updated_at = NOW()
+		WHERE id = $2
+	`, dynamicQRIS, paymentID)
 
-	response.OK(c, "payment QR generated", PaymentDetail{
-		BookingID:   bookingID,
-		TotalPrice:  totalPrice,
-		QRISPayload: dynamicQRIS,
-		ExpiredAt:   time.Now().Add(30 * time.Minute),
+	response.OK(c, "QR Code pembayaran berhasil dibuat", PaymentDetail{
+		PaymentID: paymentID,
+		BookingID: bookingID,
+		Amount:    amount,
+		QRCode:    dynamicQRIS,
+		QRType:    "dynamic",
+		Status:    "pending",
+		ExpiredAt: time.Now().Add(30 * time.Minute),
 	})
 }
 
 // AdminConfirmPayment godoc
 // POST /api/v1/admin/payments/:booking_id/confirm
 func AdminConfirmPayment(c *gin.Context) {
+	claims, _ := c.MustGet("claims").(*auth.Claims)
 	bookingID := c.Param("booking_id")
 
-	result, err := database.Pool.Exec(c.Request.Context(), `
-		UPDATE bookings
-		   SET status = 'paid', paid_at = NOW(), updated_at = NOW()
-		WHERE id = $1 AND status = 'pending_payment'
-	`, bookingID)
-	if err != nil || result.RowsAffected() == 0 {
-		response.BadRequest(c, "booking not found or already processed")
+	var adminID string
+	err := database.Pool.QueryRow(c.Request.Context(),
+		`SELECT id FROM admins WHERE firebase_uid = $1`, claims.FireUID,
+	).Scan(&adminID)
+	if err != nil {
+		response.Forbidden(c, "admin tidak ditemukan di database")
 		return
 	}
 
-	response.OK(c, "payment confirmed", gin.H{
-		"booking_id": bookingID,
-		"status":     "paid",
+	result, err := database.Pool.Exec(c.Request.Context(), `
+		UPDATE payments
+		   SET status       = 'confirmed',
+		       confirmed_by = $1,
+		       confirmed_at = NOW(),
+		       paid_at      = NOW(),
+		       updated_at   = NOW()
+		WHERE booking_id = $2 AND status = 'pending'
+	`, adminID, bookingID)
+	if err != nil || result.RowsAffected() == 0 {
+		response.BadRequest(c, "data pembayaran tidak ditemukan atau sudah diproses")
+		return
+	}
+
+	_, _ = database.Pool.Exec(c.Request.Context(), `
+		UPDATE bookings SET status = 'paid', updated_at = NOW() WHERE id = $1
+	`, bookingID)
+
+	_, _ = database.Pool.Exec(c.Request.Context(), `
+		INSERT INTO notifications (id, user_id, booking_id, message, type, is_read, created_at)
+		SELECT gen_random_uuid(), b.user_id, b.id,
+		       'Pembayaran pemesanan kamu telah dikonfirmasi oleh admin ✓',
+		       'payment_confirmed', false, NOW()
+		FROM bookings b WHERE b.id = $1
+	`, bookingID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "pembayaran dikonfirmasi",
+		"data":    gin.H{"booking_id": bookingID, "status": "paid"},
 	})
 }
 
@@ -98,14 +144,28 @@ func AdminRejectPayment(c *gin.Context) {
 	bookingID := c.Param("booking_id")
 
 	result, err := database.Pool.Exec(c.Request.Context(), `
-		UPDATE bookings
-		   SET status = 'cancelled', updated_at = NOW()
-		WHERE id = $1 AND status = 'pending_payment'
+		UPDATE payments SET status = 'rejected', updated_at = NOW()
+		WHERE booking_id = $1 AND status = 'pending'
 	`, bookingID)
 	if err != nil || result.RowsAffected() == 0 {
-		response.BadRequest(c, "booking not found or already processed")
+		response.BadRequest(c, "data pembayaran tidak ditemukan atau sudah diproses")
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "message": "payment rejected — booking cancelled", "data": gin.H{"booking_id": bookingID, "status": "cancelled"}})
+	_, _ = database.Pool.Exec(c.Request.Context(), `
+		UPDATE bookings SET status = 'cancelled', updated_at = NOW() WHERE id = $1
+	`, bookingID)
+
+	_, _ = database.Pool.Exec(c.Request.Context(), `
+		INSERT INTO notifications (id, user_id, booking_id, message, type, is_read, created_at)
+		SELECT gen_random_uuid(), b.user_id, b.id,
+		       'Pembayaran pemesanan kamu ditolak. Silakan hubungi admin.',
+		       'payment_rejected', false, NOW()
+		FROM bookings b WHERE b.id = $1
+	`, bookingID)
+
+	response.OK(c, "pembayaran ditolak — pemesanan dibatalkan", gin.H{
+		"booking_id": bookingID,
+		"status":     "cancelled",
+	})
 }

@@ -35,7 +35,7 @@ func Load() {
 		JWTExpiryHours:       getEnvInt("JWT_EXPIRY_HOURS", 24),
 		InactivityLogoutDays: getEnvInt("INACTIVITY_LOGOUT_DAYS", 30),
 		DatabaseURL:          getEnv("DATABASE_URL", ""),
-		FirebaseCredPath:     getEnv("FIREBASE_CREDENTIALS_PATH", "./firebase-service-account.json"),
+		FirebaseCredPath:     getEnv("FIREBASE_CREDENTIALS_PATH", "./firebase.json"),
 		FirebaseProjectID:    getEnv("FIREBASE_PROJECT_ID", ""),
 		FirebaseWebAPIKey:    getEnv("FIREBASE_WEB_API_KEY", ""),
 		QRISStatic:           getEnv("QRIS_STATIC", ""),
