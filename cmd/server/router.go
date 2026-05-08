@@ -61,6 +61,12 @@ func NewRouter() http.Handler {
 		adm.GET("/reports/daily", admin.DailyReport)
 		adm.GET("/users", admin.ListUsers)
 		adm.GET("/fields", admin.ListFields)
+		adm.POST("/fields", admin.CreateField)
+		adm.PATCH("/fields/:id", admin.UpdateField)
+		adm.DELETE("/fields/:id", admin.DeleteField)
+		adm.PUT("/fields/:id/schedules", admin.UpsertSchedule)
+		adm.GET("/fields/:id/schedules", admin.ListSchedules)
+		adm.DELETE("/fields/:id/schedules/:date", admin.DeleteSchedule)
 	}
 
 	return r
