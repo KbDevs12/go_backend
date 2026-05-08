@@ -36,29 +36,43 @@ func main() {
 //
 // Required env var: NGROK_AUTHTOKEN
 func runDev(handler http.Handler) {
+	go func() {
+		fmt.Println("Starting server at http://localhost:8080")
+
+		if err := http.ListenAndServe(":8080", handler); err != nil {
+			log.Fatalf("[dev] server error: %v", err)
+		}
+	}()
+
+	if err := Tunneling(context.Background()); err != nil {
+		log.Fatalf("[dev] tunnel error: %v", err)
+	}
+}
+
+const address = "http://localhost:8080"
+
+func Tunneling(ctx context.Context) error {
 	token := os.Getenv("NGROK_AUTHTOKEN")
 	if token == "" {
-		log.Fatal("[dev] NGROK_AUTHTOKEN not set in .env — cannot start ngrok tunnel")
+		return fmt.Errorf("NGROK_AUTHTOKEN is not set")
 	}
-	log.Printf("[dev] NGROK_AUTHTOKEN found: %s...", token[:8])
-
-	listener, err := ngrok.Listen(
-		context.Background())
+	agent, err := ngrok.NewAgent(ngrok.WithAuthtoken(token))
 	if err != nil {
-		log.Fatalf("[dev] failed to open ngrok tunnel: %v", err)
+		return fmt.Errorf("failed to create ngrok agent: %w", err)
 	}
 
-	fmt.Println("╔══════════════════════════════════════════════════╗")
-	fmt.Printf("║  🌐  Public URL : %-31s║\n", listener.URL())
-	fmt.Println("║  MODE          : development (ngrok)              ║")
-	fmt.Println("╚══════════════════════════════════════════════════╝")
-	fmt.Println()
-	fmt.Println("  Paste the URL above into your Flutter app's base URL config.")
-	fmt.Println()
-
-	if err := http.Serve(listener, handler); err != nil {
-		log.Fatalf("[dev] server error: %v", err)
+	ln, err := agent.Forward(ctx,
+		ngrok.WithUpstream(address),
+		ngrok.WithURL(os.Getenv("NGROK_RESERVED_DOMAIN")),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to start ngrok tunnel: %w", err)
 	}
+
+	fmt.Println("Endpoint online: forwarding from", ln.URL(), "to", address)
+
+	<-ln.Done()
+	return nil
 }
 
 func runProd(handler http.Handler) {
