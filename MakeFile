@@ -1,0 +1,11 @@
+run:
+	go run ./cmd/server
+
+build:
+	go build -o ./bin/main ./cmd/server
+
+tidy:
+	go mod tidy
+
+test:
+	go test ./qris/qris_test.go
