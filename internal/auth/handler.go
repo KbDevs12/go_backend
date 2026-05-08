@@ -108,11 +108,20 @@ func RefreshLastSeen(c *gin.Context) {
 		return
 	}
 
-	_, err := database.Pool.Exec(c.Request.Context(),
-		`UPDATE users SET last_activity_at = NOW() WHERE id = $1`, claims.UserID)
-	if err != nil {
-		response.InternalError(c, "gagal memperbarui aktivitas")
-		return
+	if claims.Role != "customer" {
+		_, err := database.Pool.Exec(c.Request.Context(),
+			`UPDATE admins SET last_login_at = NOW() WHERE id = $1`, claims.UserID)
+		if err != nil {
+			response.InternalError(c, "gagal memperbarui aktivitas")
+			return
+		}
+	} else {
+		_, err := database.Pool.Exec(c.Request.Context(),
+			`UPDATE users SET last_activity_at = NOW() WHERE id = $1`, claims.UserID)
+		if err != nil {
+			response.InternalError(c, "gagal memperbarui aktivitas")
+			return
+		}
 	}
 
 	token, err := GenerateToken(claims.UserID, claims.FireUID, claims.Email, claims.Role)
