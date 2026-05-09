@@ -51,7 +51,7 @@ func Auth() gin.HandlerFunc {
 func AdminOnly() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		claims, ok := c.MustGet(ClaimsContextKey).(*auth.Claims)
-		if !ok || claims.Role != "admin" {
+		if !ok || (claims.Role != "admin" && claims.Role != "superadmin") {
 			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
 				"success": false,
 				"message": "admin access required",
