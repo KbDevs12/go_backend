@@ -54,6 +54,7 @@ func NewRouter() http.Handler {
 	// ── Admin (Bearer + admin role required) ──────────────────────
 	adm := r.Group("/api/v1/admin", middleware.Auth(), middleware.AdminOnly())
 	{
+		adm.GET("/dashboard", admin.Dashboard)
 		adm.GET("/bookings", admin.ListBookings)
 		adm.GET("/bookings/:id", admin.GetBookingDetail)
 		adm.POST("/payments/:booking_id/confirm", payment.AdminConfirmPayment)
