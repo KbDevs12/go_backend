@@ -56,18 +56,37 @@ func NewRouter() http.Handler {
 	{
 		adm.GET("/dashboard", admin.Dashboard)
 		adm.GET("/bookings", admin.ListBookings)
+		adm.POST("/bookings", admin.CreateBooking)
 		adm.GET("/bookings/:id", admin.GetBookingDetail)
+		adm.PATCH("/bookings/:id/status", admin.UpdateBookingStatus)
+		adm.GET("/payments", admin.ListPayments)
+		adm.GET("/payments/:booking_id", admin.GetPaymentDetail)
 		adm.POST("/payments/:booking_id/confirm", payment.AdminConfirmPayment)
 		adm.POST("/payments/:booking_id/reject", payment.AdminRejectPayment)
 		adm.GET("/reports/daily", admin.DailyReport)
+		adm.GET("/reports/range", admin.RangeReport)
+		adm.GET("/notifications", admin.ListNotifications)
 		adm.GET("/users", admin.ListUsers)
+		adm.GET("/users/:id", admin.GetUserDetail)
+		adm.PATCH("/users/:id", admin.UpdateUser)
+		adm.DELETE("/users/:id", admin.DeleteUser)
 		adm.GET("/fields", admin.ListFields)
 		adm.POST("/fields", admin.CreateField)
+		adm.GET("/fields/:id", admin.GetFieldDetail)
 		adm.PATCH("/fields/:id", admin.UpdateField)
 		adm.DELETE("/fields/:id", admin.DeleteField)
 		adm.PUT("/fields/:id/schedules", admin.UpsertSchedule)
 		adm.GET("/fields/:id/schedules", admin.ListSchedules)
 		adm.DELETE("/fields/:id/schedules/:date", admin.DeleteSchedule)
+	}
+
+	// ── Superadmin (Bearer + superadmin role required) ──────────────────────
+	superAdm := r.Group("/api/v1/superadmin", middleware.Auth(), middleware.SuperAdminOnly())
+	{
+		superAdm.GET("/admins", admin.ListAdmins)
+		superAdm.POST("/admins", admin.CreateAdmin)
+		superAdm.PATCH("/admins/:id", admin.UpdateAdmin)
+		superAdm.DELETE("/admins/:id", admin.DeleteAdmin)
 	}
 
 	return r
