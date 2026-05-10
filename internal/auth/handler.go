@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"log"
 	"net/http"
 	"time"
 
@@ -167,6 +168,8 @@ func AdminLogin(c *gin.Context) {
 		return
 	}
 
+	log.Printf("[admin-login] firebase sign-in success email=%s token_len=%d", req.Email, len(fireIDToken))
+
 	fireToken, err := firebase.VerifyIDToken(ctx, fireIDToken)
 	if err != nil {
 		response.Unauthorized(c, "verifikasi token gagal")
@@ -175,6 +178,7 @@ func AdminLogin(c *gin.Context) {
 
 	fireUser, err := firebase.GetUser(ctx, fireToken.UID)
 	if err != nil {
+		log.Printf("[admin-login] VerifyIDToken failed email=%s err=%v", req.Email, err)
 		response.InternalError(c, "gagal mengambil data user")
 		return
 	}
