@@ -62,6 +62,20 @@ func AdminOnly() gin.HandlerFunc {
 	}
 }
 
+func SuperAdminOnly() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		claims, ok := c.MustGet(ClaimsContextKey).(*auth.Claims)
+		if !ok || claims.Role != "superadmin" {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"success": false,
+				"message": "superadmin access required",
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
 func ClaimsFrom(c *gin.Context) (*auth.Claims, bool) {
 	val, exists := c.Get(ClaimsContextKey)
 	if !exists {
