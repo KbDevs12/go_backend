@@ -35,3 +35,36 @@ func VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error) {
 func GetUser(ctx context.Context, uid string) (*auth.UserRecord, error) {
 	return AuthClient.GetUser(ctx, uid)
 }
+
+func CreateUser(ctx context.Context, email, password, displayName string, emailVerified bool) (*auth.UserRecord, error) {
+	params := (&auth.UserToCreate{}).
+		Email(email).
+		Password(password).
+		DisplayName(displayName).
+		EmailVerified(emailVerified)
+
+	return AuthClient.CreateUser(ctx, params)
+}
+
+func UpdateUser(ctx context.Context, uid string, email, displayName *string, password *string, disabled *bool) (*auth.UserRecord, error) {
+	params := (&auth.UserToUpdate{})
+
+	if email != nil {
+		params.Email(*email)
+	}
+	if displayName != nil {
+		params.DisplayName(*displayName)
+	}
+	if password != nil && *password != "" {
+		params.Password(*password)
+	}
+	if disabled != nil {
+		params.Disabled(*disabled)
+	}
+
+	return AuthClient.UpdateUser(ctx, uid, params)
+}
+
+func DeleteUser(ctx context.Context, uid string) error {
+	return AuthClient.DeleteUser(ctx, uid)
+}
