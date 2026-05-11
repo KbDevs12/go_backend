@@ -81,7 +81,7 @@ func NewRouter() http.Handler {
 	}
 
 	// ── Superadmin (Bearer + superadmin role required) ──────────────────────
-	superAdm := r.Group("/api/v1/superadmin", middleware.Auth(), middleware.SuperAdminOnly())
+	superAdm := r.Group("/api/v1/admin", middleware.Auth(), middleware.SuperAdminOnly())
 	{
 		superAdm.GET("/admins", admin.ListAdmins)
 		superAdm.POST("/admins", admin.CreateAdmin)
