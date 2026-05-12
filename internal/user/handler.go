@@ -128,3 +128,73 @@ func GetNotifications(c *gin.Context) {
 
 	response.OK(c, "notifikasi berhasil diambil", notifs)
 }
+
+type FCMTokenRequest struct {
+	Token    string `json:"token" binding:"required"`
+	Platform string `json:"platform"`
+}
+
+// Upsert FCMToken godoc
+// POST /api/v1/user/fcm-token
+func UpsertFCMToken(c *gin.Context) {
+	claims, ok := c.MustGet("claims").(*auth.Claims)
+	if !ok {
+		response.Unauthorized(c, "unauthorized")
+		return
+	}
+
+	var req FCMTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Token == "" {
+		response.BadRequest(c, "request tidak valid")
+		return
+	}
+
+	if req.Platform == "" {
+		req.Platform = "unknown"
+	}
+
+	_, err := database.Pool.Exec(c.Request.Context(), `
+		INSERT INTO user_device_tokens (id, user_id, token, platform, is_active, last_seen_at, created_at, updated_at)
+		VALUES (gen_random_uuid(), $1, $2, $3, true, NOW(), NOW(), NOW())
+		ON CONFLICT (token) DO UPDATE SET
+			user_id = EXCLUDED.user_id,
+			platform = EXCLUDED.platform,
+			is_active = true,
+			last_seen_at = NOW(),
+			updated_at = NOW()
+	`, claims.UserID, req.Token, req.Platform)
+	if err != nil {
+		response.InternalError(c, "gagal menyimpan token FCM")
+		return
+	}
+
+	response.OK(c, "token FCM berhasil disimpan", nil)
+}
+
+// DeleteFCMToken godoc
+// DELETE /api/v1/user/fcm-token
+func DeleteFCMToken(c *gin.Context) {
+	claims, ok := c.MustGet("claims").(*auth.Claims)
+	if !ok {
+		response.Unauthorized(c, "unauthorized")
+		return
+	}
+
+	var req FCMTokenRequest
+	if err := c.ShouldBindJSON(&req); err != nil || req.Token == "" {
+		response.BadRequest(c, "token FCM tidak valid")
+		return
+	}
+
+	_, err := database.Pool.Exec(c.Request.Context(), `
+		UPDATE user_device_tokens
+		SET is_active = false, updated_at = NOW()
+		WHERE user_id = $1 AND token = $2
+	`, claims.UserID, req.Token)
+	if err != nil {
+		response.InternalError(c, "gagal menghapus token FCM")
+		return
+	}
+
+	response.OK(c, "token FCM berhasil dinonaktifkan", nil)
+}
