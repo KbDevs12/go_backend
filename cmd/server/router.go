@@ -42,6 +42,9 @@ func NewRouter() http.Handler {
 
 		customer.GET("/user/profile", user.GetProfile)
 		customer.PATCH("/user/profile", user.UpdateProfile)
+		customer.GET("/user/notifications", user.GetNotifications)
+		customer.POST("/user/fcm-token", user.UpsertFCMToken)
+		customer.DELETE("/user/fcm-token", user.DeleteFCMToken)
 
 		customer.POST("/bookings", booking.Create)
 		customer.GET("/bookings", booking.ListMine)
