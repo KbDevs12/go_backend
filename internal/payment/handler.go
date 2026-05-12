@@ -8,6 +8,7 @@ import (
 	"backend/internal/auth"
 	"backend/internal/config"
 	"backend/internal/database"
+	"backend/internal/notification"
 	"backend/pkg/qris"
 	"backend/pkg/response"
 
@@ -123,13 +124,18 @@ func AdminConfirmPayment(c *gin.Context) {
 		UPDATE bookings SET status = 'paid', updated_at = NOW() WHERE id = $1
 	`, bookingID)
 
-	_, _ = database.Pool.Exec(c.Request.Context(), `
-		INSERT INTO notifications (id, user_id, booking_id, message, type, is_read, created_at)
-		SELECT gen_random_uuid(), b.user_id, b.id,
-		       'Pembayaran pemesanan kamu telah dikonfirmasi oleh admin ✓',
-		       'payment_confirmed', false, NOW()
-		FROM bookings b WHERE b.id = $1
-	`, bookingID)
+	var userID string
+	if err := database.Pool.QueryRow(c.Request.Context(),
+		`SELECT user_id FROM bookings WHERE id = $1`, bookingID,
+	).Scan(&userID); err == nil {
+		_ = notification.CreateAndPush(c.Request.Context(), notification.PushRequest{
+			UserID:    userID,
+			BookingID: bookingID,
+			Title:     "Pembayaran dikonfirmasi",
+			Message:   "Pembayaran pemesanan kamu telah dikonfirmasi oleh admin ✓",
+			Type:      "payment_confirmed",
+		})
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -156,13 +162,18 @@ func AdminRejectPayment(c *gin.Context) {
 		UPDATE bookings SET status = 'cancelled', updated_at = NOW() WHERE id = $1
 	`, bookingID)
 
-	_, _ = database.Pool.Exec(c.Request.Context(), `
-		INSERT INTO notifications (id, user_id, booking_id, message, type, is_read, created_at)
-		SELECT gen_random_uuid(), b.user_id, b.id,
-		       'Pembayaran pemesanan kamu ditolak. Silakan hubungi admin.',
-		       'payment_rejected', false, NOW()
-		FROM bookings b WHERE b.id = $1
-	`, bookingID)
+	var userID string
+	if err := database.Pool.QueryRow(c.Request.Context(),
+		`SELECT user_id FROM bookings WHERE id = $1`, bookingID,
+	).Scan(&userID); err == nil {
+		_ = notification.CreateAndPush(c.Request.Context(), notification.PushRequest{
+			UserID:    userID,
+			BookingID: bookingID,
+			Title:     "Pembayaran ditolak",
+			Message:   "Pembayaran pemesanan kamu ditolak. Silakan hubungi admin.",
+			Type:      "payment_rejected",
+		})
+	}
 
 	response.OK(c, "pembayaran ditolak — pemesanan dibatalkan", gin.H{
 		"booking_id": bookingID,

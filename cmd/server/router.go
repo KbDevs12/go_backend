@@ -32,7 +32,7 @@ func NewRouter() http.Handler {
 
 	// ── Public ────────────────────────────────────────────────────
 	r.POST("/api/v1/auth/login", auth.Login)
-	r.POST("/api/v1/auth/admin-login", auth.AdminLogin) // untuk React Admin panel
+	r.POST("/api/v1/auth/admin-login", auth.AdminLogin)
 	r.GET("/api/v1/fields/availability", booking.GetAvailability)
 
 	// ── Customer (Bearer required) ────────────────────────────────

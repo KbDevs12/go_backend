@@ -83,7 +83,6 @@ func Login(c *gin.Context) {
 	})
 }
 
-// upsertUser — sesuai tabel users di class diagram (name, email, phone, email_verified)
 func upsertUser(ctx context.Context, fireUID, email, name string) (string, string, error) {
 	const query = `
 		INSERT INTO users (firebase_uid, name, email, email_verified, last_login_at, created_at)
@@ -139,7 +138,6 @@ func RefreshLastSeen(c *gin.Context) {
 	})
 }
 
-// AdminLoginRequest untuk panel web admin
 type AdminLoginRequest struct {
 	Email    string `json:"email"    binding:"required,email"`
 	Password string `json:"password" binding:"required"`
@@ -188,7 +186,6 @@ func AdminLogin(c *gin.Context) {
 		return
 	}
 
-	// Cek di tabel admins (tabel terpisah sesuai class diagram)
 	var adminID, adminName, role string
 	err = database.Pool.QueryRow(ctx,
 		`SELECT id, username, role FROM admins WHERE firebase_uid = $1`, fireToken.UID,
