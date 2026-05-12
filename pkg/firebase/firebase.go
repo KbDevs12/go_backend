@@ -8,10 +8,12 @@ import (
 
 	firebase "firebase.google.com/go/v4"
 	"firebase.google.com/go/v4/auth"
+	"firebase.google.com/go/v4/messaging"
 	"google.golang.org/api/option"
 )
 
 var AuthClient *auth.Client
+var MessagingClient *messaging.Client
 
 func Init() {
 	opt := option.WithCredentialsFile(config.App.FirebaseCredPath)
@@ -23,6 +25,11 @@ func Init() {
 	AuthClient, err = app.Auth(context.Background())
 	if err != nil {
 		log.Fatalf("[Firebase] Failed to initialize Firebase Auth client: %v", err)
+	}
+
+	MessagingClient, err = app.Messaging(context.Background())
+	if err != nil {
+		log.Fatalf("[Firebase] Failed to initialize Firebase Messaging client: %v", err)
 	}
 
 	log.Println("[Firebase] Firebase initialized successfully")
