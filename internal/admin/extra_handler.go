@@ -17,24 +17,28 @@ import (
 )
 
 type PaymentSummary struct {
-	PaymentID     string     `json:"id"`
-	BookingID     string     `json:"booking_id"`
-	Amount        int64      `json:"amount"`
-	QRCode        string     `json:"qr_code,omitempty"`
-	QRType        string     `json:"qr_type"`
-	PaymentStatus string     `json:"payment_status"`
-	PaidAt        *time.Time `json:"paid_at,omitempty"`
-	ConfirmedAt   *time.Time `json:"confirmed_at,omitempty"`
-	ConfirmedBy   *string    `json:"confirmed_by,omitempty"`
-	BookingStatus string     `json:"booking_status"`
-	Date          string     `json:"date"`
-	StartTime     string     `json:"start_time"`
-	EndTime       string     `json:"end_time"`
-	CustomerName  string     `json:"customer_name"`
-	CustomerEmail string     `json:"customer_email"`
-	FieldName     string     `json:"field_name"`
-	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt     *time.Time `json:"updated_at,omitempty"`
+	PaymentID      string     `json:"id"`
+	BookingID      string     `json:"booking_id"`
+	Amount         int64      `json:"amount"`
+	QRCode         string     `json:"qr_code,omitempty"`
+	QRType         string     `json:"qr_type"`
+	PaymentStatus  string     `json:"payment_status"`
+	PaidAt         *time.Time `json:"paid_at,omitempty"`
+	ConfirmedAt    *time.Time `json:"confirmed_at,omitempty"`
+	ConfirmedBy    *string    `json:"confirmed_by,omitempty"`
+	ProofImageURL  string     `json:"proof_image_url,omitempty"`
+	ProofObjectKey string     `json:"proof_object_key,omitempty"`
+	ProofNote      string     `json:"proof_note,omitempty"`
+	SubmittedAt    *time.Time `json:"submitted_at,omitempty"`
+	BookingStatus  string     `json:"booking_status"`
+	Date           string     `json:"date"`
+	StartTime      string     `json:"start_time"`
+	EndTime        string     `json:"end_time"`
+	CustomerName   string     `json:"customer_name"`
+	CustomerEmail  string     `json:"customer_email"`
+	FieldName      string     `json:"field_name"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty"`
 }
 
 type UserDetailRow struct {
@@ -93,6 +97,7 @@ func ListPayments(c *gin.Context) {
         SELECT
             p.id::text, b.id::text, p.amount, COALESCE(p.qr_code,''), p.qr_type,
             p.status, p.paid_at, p.confirmed_at, p.confirmed_by::text,
+            COALESCE(p.proof_image_url,''), COALESCE(p.proof_object_key,''), COALESCE(p.proof_note,''), p.submitted_at,
             b.status, b.date::text, b.start_time::text, b.end_time::text,
             u.name, u.email, f.name, p.created_at, p.updated_at,
             COUNT(*) OVER() AS total_count
@@ -120,6 +125,7 @@ func ListPayments(c *gin.Context) {
 		if err := rows.Scan(
 			&p.PaymentID, &p.BookingID, &p.Amount, &p.QRCode, &p.QRType,
 			&p.PaymentStatus, &p.PaidAt, &p.ConfirmedAt, &p.ConfirmedBy,
+			&p.ProofImageURL, &p.ProofObjectKey, &p.ProofNote, &p.SubmittedAt,
 			&p.BookingStatus, &p.Date, &p.StartTime, &p.EndTime,
 			&p.CustomerName, &p.CustomerEmail, &p.FieldName, &p.CreatedAt, &p.UpdatedAt,
 			&totalCount,
@@ -146,6 +152,7 @@ func GetPaymentDetail(c *gin.Context) {
         SELECT
             p.id::text, b.id::text, p.amount, COALESCE(p.qr_code,''), p.qr_type,
             p.status, p.paid_at, p.confirmed_at, p.confirmed_by::text,
+            COALESCE(p.proof_image_url,''), COALESCE(p.proof_object_key,''), COALESCE(p.proof_note,''), p.submitted_at,
             b.status, b.date::text, b.start_time::text, b.end_time::text,
             u.name, u.email, f.name, p.created_at, p.updated_at
         FROM payments p
@@ -156,6 +163,7 @@ func GetPaymentDetail(c *gin.Context) {
     `, bookingID).Scan(
 		&p.PaymentID, &p.BookingID, &p.Amount, &p.QRCode, &p.QRType,
 		&p.PaymentStatus, &p.PaidAt, &p.ConfirmedAt, &p.ConfirmedBy,
+		&p.ProofImageURL, &p.ProofObjectKey, &p.ProofNote, &p.SubmittedAt,
 		&p.BookingStatus, &p.Date, &p.StartTime, &p.EndTime,
 		&p.CustomerName, &p.CustomerEmail, &p.FieldName, &p.CreatedAt, &p.UpdatedAt,
 	)
@@ -331,11 +339,11 @@ func UpdateBookingStatus(c *gin.Context) {
 
 	switch req.Status {
 	case "cancelled":
-		_, _ = tx.Exec(ctx, `UPDATE payments SET status = 'rejected', updated_at = NOW() WHERE booking_id = $1 AND status = 'pending'`, bookingID)
+		_, _ = tx.Exec(ctx, `UPDATE payments SET status = 'rejected', updated_at = NOW() WHERE booking_id = $1 AND status IN ('pending','awaiting_verification')`, bookingID)
 	case "paid", "confirmed", "completed":
 		_, _ = tx.Exec(ctx, `
             UPDATE payments
-               SET status = CASE WHEN status = 'pending' THEN 'confirmed' ELSE status END,
+               SET status = CASE WHEN status IN ('pending','awaiting_verification') THEN 'confirmed' ELSE status END,
                    paid_at = COALESCE(paid_at, NOW()),
                    confirmed_at = COALESCE(confirmed_at, NOW()),
                    updated_at = NOW()

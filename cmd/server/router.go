@@ -52,6 +52,7 @@ func NewRouter() http.Handler {
 		customer.PATCH("/bookings/:id/cancel", booking.Cancel)
 
 		customer.GET("/payments/:booking_id/qr", payment.GetPaymentQR)
+		customer.POST("/payments/:booking_id/proof", payment.SubmitPaymentProof)
 	}
 
 	// ── Admin (Bearer + admin role required) ──────────────────────
