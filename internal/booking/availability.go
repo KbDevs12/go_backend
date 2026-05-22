@@ -40,19 +40,27 @@ func GetAvailability(c *gin.Context) {
 		return
 	}
 
-	// Join fields + schedules + bookings
+	// Ambil jadwal khusus dari tabel schedules untuk tanggal yang dipilih.
+	// LATERAL + LIMIT 1 membuat response tetap aman walau database belum punya
+	// unique constraint (field_id, date) di tabel schedules.
 	rows, err := database.Pool.Query(c.Request.Context(), `
 		SELECT
 		  f.id, f.name, f.type, f.price_per_hour, f.is_available,
-		  COALESCE(s.open_time::text,  '08:00'),
-		  COALESCE(s.close_time::text, '23:00'),
+		  COALESCE(s.open_time::text,  '08:00:00'),
+		  COALESCE(s.close_time::text, '23:00:00'),
 		  COALESCE(s.is_closed, false),
 		  COALESCE(b.start_time::text, ''),
 		  COALESCE(b.end_time::text,   '')
 		FROM fields f
-		LEFT JOIN schedules s ON s.field_id = f.id AND s.date = $1
-		LEFT JOIN bookings  b ON b.field_id = f.id AND b.date = $1
-		                      AND b.status NOT IN ('cancelled')
+		LEFT JOIN LATERAL (
+			SELECT open_time, close_time, is_closed
+			FROM schedules
+			WHERE field_id = f.id AND date = $1
+			ORDER BY created_at DESC
+			LIMIT 1
+		) s ON true
+		LEFT JOIN bookings b ON b.field_id = f.id AND b.date = $1
+		                    AND b.status NOT IN ('cancelled')
 		WHERE f.is_available = true
 		ORDER BY f.name, b.start_time
 	`, date)
