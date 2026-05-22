@@ -198,25 +198,39 @@ func CreateBooking(c *gin.Context) {
 	}
 
 	var pricePerHour int64
-	var fieldName string
+	var fieldName, openTime, closeTime string
+	var isClosed bool
 	err := database.Pool.QueryRow(ctx, `
-        SELECT name, price_per_hour
-        FROM fields
-        WHERE id = $1 AND is_available = true
-    `, req.FieldID).Scan(&fieldName, &pricePerHour)
+        SELECT
+            f.name,
+            f.price_per_hour,
+            COALESCE(s.open_time::text, '08:00:00'),
+            COALESCE(s.close_time::text, '23:00:00'),
+            COALESCE(s.is_closed, false)
+        FROM fields f
+        LEFT JOIN LATERAL (
+            SELECT open_time, close_time, is_closed
+            FROM schedules
+            WHERE field_id = f.id AND date = $2
+            ORDER BY created_at DESC
+            LIMIT 1
+        ) s ON true
+        WHERE f.id = $1 AND f.is_available = true
+    `, req.FieldID, req.Date).Scan(&fieldName, &pricePerHour, &openTime, &closeTime, &isClosed)
 	if err != nil {
 		response.NotFound(c, "lapangan tidak ditemukan atau tidak tersedia")
 		return
 	}
 
-	var isClosed bool
-	_ = database.Pool.QueryRow(ctx, `
-        SELECT COALESCE(is_closed, false)
-        FROM schedules
-        WHERE field_id = $1 AND date = $2
-    `, req.FieldID, req.Date).Scan(&isClosed)
 	if isClosed {
 		response.BadRequest(c, "lapangan tutup pada tanggal tersebut")
+		return
+	}
+
+	start, _ := time.Parse("15:04", req.StartTime)
+	end, _ := time.Parse("15:04", req.EndTime)
+	if err := validateAdminBookingInsideSchedule(start, end, openTime, closeTime); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -233,8 +247,6 @@ func CreateBooking(c *gin.Context) {
 		return
 	}
 
-	start, _ := time.Parse("15:04", req.StartTime)
-	end, _ := time.Parse("15:04", req.EndTime)
 	durationHrs := end.Sub(start).Hours()
 	totalPrice := int64(durationHrs * float64(pricePerHour))
 
@@ -628,4 +640,30 @@ func RequireSuperAdmin(c *gin.Context) bool {
 		return false
 	}
 	return true
+}
+
+func validateAdminBookingInsideSchedule(start, end time.Time, openTime, closeTime string) error {
+	open, err := parseAdminClock(openTime)
+	if err != nil {
+		return fmt.Errorf("jadwal buka lapangan tidak valid")
+	}
+	close, err := parseAdminClock(closeTime)
+	if err != nil {
+		return fmt.Errorf("jadwal tutup lapangan tidak valid")
+	}
+	if start.Before(open) || end.After(close) {
+		return fmt.Errorf("jam booking harus berada di antara %s-%s", formatAdminClock(open), formatAdminClock(close))
+	}
+	return nil
+}
+
+func parseAdminClock(value string) (time.Time, error) {
+	if parsed, err := time.Parse("15:04", value); err == nil {
+		return parsed, nil
+	}
+	return time.Parse("15:04:05", value)
+}
+
+func formatAdminClock(value time.Time) string {
+	return value.Format("15:04")
 }
