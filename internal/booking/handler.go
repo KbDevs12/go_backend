@@ -56,26 +56,46 @@ func Create(c *gin.Context) {
 		return
 	}
 
+	start, end, err := validateBookingDateAndTime(req.Date, req.StartTime, req.EndTime)
+	if err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
+
 	ctx := c.Request.Context()
 
 	var pricePerHour int64
-	var fieldName string
-	err := database.Pool.QueryRow(ctx,
-		`SELECT name, price_per_hour FROM fields WHERE id = $1 AND is_available = true`,
-		req.FieldID,
-	).Scan(&fieldName, &pricePerHour)
+	var fieldName, openTime, closeTime string
+	var isClosed bool
+	err = database.Pool.QueryRow(ctx, `
+		SELECT
+			f.name,
+			f.price_per_hour,
+			COALESCE(s.open_time::text, '08:00:00'),
+			COALESCE(s.close_time::text, '23:00:00'),
+			COALESCE(s.is_closed, false)
+		FROM fields f
+		LEFT JOIN LATERAL (
+			SELECT open_time, close_time, is_closed
+			FROM schedules
+			WHERE field_id = f.id AND date = $2
+			ORDER BY created_at DESC
+			LIMIT 1
+		) s ON true
+		WHERE f.id = $1 AND f.is_available = true
+	`, req.FieldID, req.Date).Scan(&fieldName, &pricePerHour, &openTime, &closeTime, &isClosed)
 	if err != nil {
 		response.NotFound(c, "lapangan tidak ditemukan atau tidak tersedia")
 		return
 	}
 
-	var isClosed bool
-	_ = database.Pool.QueryRow(ctx,
-		`SELECT COALESCE(is_closed, false) FROM schedules WHERE field_id = $1 AND date = $2`,
-		req.FieldID, req.Date,
-	).Scan(&isClosed)
 	if isClosed {
 		response.BadRequest(c, "lapangan tutup pada tanggal tersebut")
+		return
+	}
+
+	if err := validateBookingInsideSchedule(start, end, openTime, closeTime); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -92,14 +112,7 @@ func Create(c *gin.Context) {
 		return
 	}
 
-	layout := "15:04"
-	start, _ := time.Parse(layout, req.StartTime)
-	end, _ := time.Parse(layout, req.EndTime)
 	durationHrs := end.Sub(start).Hours()
-	if durationHrs <= 0 {
-		response.BadRequest(c, "end_time harus setelah start_time")
-		return
-	}
 	totalPrice := int64(durationHrs * float64(pricePerHour))
 
 	bookingID := uuid.NewString()
@@ -236,4 +249,48 @@ func Cancel(c *gin.Context) {
 	`, bookingID)
 
 	response.OK(c, "pemesanan berhasil dibatalkan", nil)
+}
+
+func validateBookingDateAndTime(date, startTime, endTime string) (time.Time, time.Time, error) {
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("format tanggal tidak valid — gunakan YYYY-MM-DD")
+	}
+	start, err := parseClock(startTime)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("format start_time tidak valid — gunakan HH:MM")
+	}
+	end, err := parseClock(endTime)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("format end_time tidak valid — gunakan HH:MM")
+	}
+	if !end.After(start) {
+		return time.Time{}, time.Time{}, fmt.Errorf("end_time harus setelah start_time")
+	}
+	return start, end, nil
+}
+
+func validateBookingInsideSchedule(start, end time.Time, openTime, closeTime string) error {
+	open, err := parseClock(openTime)
+	if err != nil {
+		return fmt.Errorf("jadwal buka lapangan tidak valid")
+	}
+	close, err := parseClock(closeTime)
+	if err != nil {
+		return fmt.Errorf("jadwal tutup lapangan tidak valid")
+	}
+	if start.Before(open) || end.After(close) {
+		return fmt.Errorf("jam booking harus berada di antara %s-%s", formatClock(open), formatClock(close))
+	}
+	return nil
+}
+
+func parseClock(value string) (time.Time, error) {
+	if parsed, err := time.Parse("15:04", value); err == nil {
+		return parsed, nil
+	}
+	return time.Parse("15:04:05", value)
+}
+
+func formatClock(value time.Time) string {
+	return value.Format("15:04")
 }
