@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v4"
 )
 
 type FieldRow struct {
@@ -181,9 +182,27 @@ func DeleteField(c *gin.Context) {
 		return
 	}
 
-	result, err := database.Pool.Exec(ctx, `DELETE FROM fields WHERE id = $1`, fieldID)
+	tx, err := database.Pool.Begin(ctx)
+	if err != nil {
+		response.InternalError(c, "gagal memulai transaksi hapus lapangan")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	_, err = tx.Exec(ctx, `DELETE FROM schedules WHERE field_id = $1`, fieldID)
+	if err != nil {
+		response.InternalError(c, "gagal menghapus jadwal lapangan")
+		return
+	}
+
+	result, err := tx.Exec(ctx, `DELETE FROM fields WHERE id = $1`, fieldID)
 	if err != nil || result.RowsAffected() == 0 {
 		response.NotFound(c, "lapangan tidak ditemukan")
+		return
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		response.InternalError(c, "gagal menghapus lapangan")
 		return
 	}
 
@@ -246,21 +265,48 @@ func UpsertSchedule(c *gin.Context) {
 		closeTime = "23:00"
 	}
 
-	scheduleID := uuid.NewString()
+	ctx := c.Request.Context()
+	tx, err := database.Pool.Begin(ctx)
+	if err != nil {
+		response.InternalError(c, "gagal memulai transaksi jadwal")
+		return
+	}
+	defer tx.Rollback(ctx)
+
 	var sched ScheduleRow
-	err := database.Pool.QueryRow(c.Request.Context(), `
-		INSERT INTO schedules (id, field_id, date, open_time, close_time, is_closed, created_at)
-		VALUES ($1, $2, $3, $4::time, $5::time, $6, NOW())
-		ON CONFLICT (field_id, date) DO UPDATE
-		  SET open_time  = EXCLUDED.open_time,
-		      close_time = EXCLUDED.close_time,
-		      is_closed  = EXCLUDED.is_closed
+	err = tx.QueryRow(ctx, `
+		UPDATE schedules
+		SET open_time = $1::time,
+		    close_time = $2::time,
+		    is_closed = $3
+		WHERE id = (
+			SELECT id
+			FROM schedules
+			WHERE field_id = $4 AND date = $5
+			ORDER BY created_at DESC
+			LIMIT 1
+		)
 		RETURNING id, field_id, date::text, open_time::text, close_time::text, is_closed, created_at
-	`, scheduleID, fieldID, req.Date, openTime, closeTime, req.IsClosed).Scan(
+	`, openTime, closeTime, req.IsClosed, fieldID, req.Date).Scan(
 		&sched.ID, &sched.FieldID, &sched.Date,
 		&sched.OpenTime, &sched.CloseTime, &sched.IsClosed, &sched.CreatedAt,
 	)
+	if err == pgx.ErrNoRows {
+		scheduleID := uuid.NewString()
+		err = tx.QueryRow(ctx, `
+			INSERT INTO schedules (id, field_id, date, open_time, close_time, is_closed, created_at)
+			VALUES ($1, $2, $3, $4::time, $5::time, $6, NOW())
+			RETURNING id, field_id, date::text, open_time::text, close_time::text, is_closed, created_at
+		`, scheduleID, fieldID, req.Date, openTime, closeTime, req.IsClosed).Scan(
+			&sched.ID, &sched.FieldID, &sched.Date,
+			&sched.OpenTime, &sched.CloseTime, &sched.IsClosed, &sched.CreatedAt,
+		)
+	}
 	if err != nil {
+		response.InternalError(c, "gagal menyimpan jadwal")
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
 		response.InternalError(c, "gagal menyimpan jadwal")
 		return
 	}
@@ -286,6 +332,20 @@ func ListSchedules(c *gin.Context) {
 	if to == "" {
 		firstOfNext := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC)
 		to = firstOfNext.AddDate(0, 0, -1).Format("2006-01-02")
+	}
+	fromDate, err := time.Parse("2006-01-02", from)
+	if err != nil {
+		response.BadRequest(c, "format from tidak valid — gunakan YYYY-MM-DD")
+		return
+	}
+	toDate, err := time.Parse("2006-01-02", to)
+	if err != nil {
+		response.BadRequest(c, "format to tidak valid — gunakan YYYY-MM-DD")
+		return
+	}
+	if toDate.Before(fromDate) {
+		response.BadRequest(c, "to harus sama atau setelah from")
+		return
 	}
 
 	rows, err := database.Pool.Query(c.Request.Context(), `
@@ -324,6 +384,11 @@ func ListSchedules(c *gin.Context) {
 func DeleteSchedule(c *gin.Context) {
 	fieldID := c.Param("id")
 	date := c.Param("date")
+
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		response.BadRequest(c, "format tanggal tidak valid — gunakan YYYY-MM-DD")
+		return
+	}
 
 	result, err := database.Pool.Exec(c.Request.Context(),
 		`DELETE FROM schedules WHERE field_id = $1 AND date = $2`, fieldID, date)
