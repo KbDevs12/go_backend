@@ -401,6 +401,8 @@ Tabel utama yang digunakan:
 - `notifications`
 - `reports`
 - `user_device_tokens`
+- `admin_device_tokens`
+- `admin_notifications`
 
 ## Flow Booking
 
@@ -423,11 +425,3 @@ Tabel utama yang digunakan:
 11. User mengambil QR pembayaran.
 12. User upload bukti pembayaran.
 13. Admin melakukan confirm atau reject pembayaran.
-
-## Notes Development
-
-- Jangan commit `.env`.
-- Jangan commit Firebase service account JSON.
-- Pastikan `DATABASE_URL` mengarah ke database yang memiliki schema sesuai project.
-- Untuk development mobile, gunakan URL Ngrok atau IP lokal yang bisa diakses device.
-- Jika ingin memakai tunnel otomatis, jalankan dengan `APP_ENV=development` dan set `NGROK_AUTHTOKEN`.
