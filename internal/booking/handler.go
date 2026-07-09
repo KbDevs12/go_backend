@@ -6,6 +6,7 @@ import (
 
 	"backend/internal/auth"
 	"backend/internal/database"
+	"backend/internal/notification"
 	"backend/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -135,6 +136,20 @@ func Create(c *gin.Context) {
 		response.InternalError(c, "gagal membuat record pembayaran")
 		return
 	}
+
+	customerName := claims.Email
+	_ = database.Pool.QueryRow(ctx, `
+		SELECT COALESCE(NULLIF(name, ''), email)
+		FROM users
+		WHERE id = $1
+	`, claims.UserID).Scan(&customerName)
+
+	_ = notification.CreateAdminAndPush(ctx, notification.AdminPushRequest{
+		BookingID: bookingID,
+		Title:     "Booking baru masuk",
+		Message:   fmt.Sprintf("%s membuat booking %s pada %s pukul %s-%s", customerName, fieldName, req.Date, req.StartTime, req.EndTime),
+		Type:      "new_booking",
+	})
 
 	response.Created(c, fmt.Sprintf("pemesanan berhasil dibuat untuk %s", fieldName), Booking{
 		ID:          bookingID,
