@@ -136,6 +136,7 @@ type FCMTokenRequest struct {
 
 // Upsert FCMToken godoc
 // POST /api/v1/user/fcm-token
+// Endpoint ini dipakai oleh customer, admin, dan superadmin.
 func UpsertFCMToken(c *gin.Context) {
 	claims, ok := c.MustGet("claims").(*auth.Claims)
 	if !ok {
@@ -153,7 +154,42 @@ func UpsertFCMToken(c *gin.Context) {
 		req.Platform = "unknown"
 	}
 
-	_, err := database.Pool.Exec(c.Request.Context(), `
+	ctx := c.Request.Context()
+
+	if claims.Role == "admin" || claims.Role == "superadmin" {
+		// Satu device token hanya boleh aktif untuk identitas yang sedang login.
+		_, _ = database.Pool.Exec(ctx, `
+			UPDATE user_device_tokens
+			SET is_active = false, updated_at = NOW()
+			WHERE token = $1
+		`, req.Token)
+
+		_, err := database.Pool.Exec(ctx, `
+			INSERT INTO admin_device_tokens (id, admin_id, token, platform, is_active, last_seen_at, created_at, updated_at)
+			VALUES (gen_random_uuid(), $1, $2, $3, true, NOW(), NOW(), NOW())
+			ON CONFLICT (token) DO UPDATE SET
+				admin_id = EXCLUDED.admin_id,
+				platform = EXCLUDED.platform,
+				is_active = true,
+				last_seen_at = NOW(),
+				updated_at = NOW()
+		`, claims.UserID, req.Token, req.Platform)
+		if err != nil {
+			response.InternalError(c, "gagal menyimpan token FCM admin")
+			return
+		}
+
+		response.OK(c, "token FCM admin berhasil disimpan", nil)
+		return
+	}
+
+	_, _ = database.Pool.Exec(ctx, `
+		UPDATE admin_device_tokens
+		SET is_active = false, updated_at = NOW()
+		WHERE token = $1
+	`, req.Token)
+
+	_, err := database.Pool.Exec(ctx, `
 		INSERT INTO user_device_tokens (id, user_id, token, platform, is_active, last_seen_at, created_at, updated_at)
 		VALUES (gen_random_uuid(), $1, $2, $3, true, NOW(), NOW(), NOW())
 		ON CONFLICT (token) DO UPDATE SET
@@ -186,7 +222,22 @@ func DeleteFCMToken(c *gin.Context) {
 		return
 	}
 
-	_, err := database.Pool.Exec(c.Request.Context(), `
+	ctx := c.Request.Context()
+	if claims.Role == "admin" || claims.Role == "superadmin" {
+		_, err := database.Pool.Exec(ctx, `
+			UPDATE admin_device_tokens
+			SET is_active = false, updated_at = NOW()
+			WHERE admin_id = $1 AND token = $2
+		`, claims.UserID, req.Token)
+		if err != nil {
+			response.InternalError(c, "gagal menghapus token FCM admin")
+			return
+		}
+		response.OK(c, "token FCM admin berhasil dinonaktifkan", nil)
+		return
+	}
+
+	_, err := database.Pool.Exec(ctx, `
 		UPDATE user_device_tokens
 		SET is_active = false, updated_at = NOW()
 		WHERE user_id = $1 AND token = $2
