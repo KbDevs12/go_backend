@@ -12,8 +12,13 @@ import (
 var Pool *pgxpool.Pool
 
 func Connect() {
-	var err error
-	Pool, err = pgxpool.Connect(context.Background(), config.App.DatabaseURL)
+	poolConfig, err := pgxpool.ParseConfig(config.App.DatabaseURL)
+	if err != nil {
+		log.Fatalf("[Database] Failed to parse database URL: %v", err)
+	}
+	poolConfig.ConnConfig.PreferSimpleProtocol = true
+
+	Pool, err = pgxpool.ConnectConfig(context.Background(), poolConfig)
 	if err != nil {
 		log.Fatalf("[Database] Failed to connect to database: %v", err)
 	}
