@@ -10,6 +10,7 @@ import (
 
 	"backend/internal/auth"
 	"backend/internal/database"
+	"backend/pkg/firebase"
 	"backend/pkg/response"
 
 	"github.com/gin-gonic/gin"
@@ -53,6 +54,14 @@ type UserDetailRow struct {
 	CreatedAt      time.Time  `json:"created_at"`
 	TotalBookings  int        `json:"total_bookings"`
 	TotalSpent     int64      `json:"total_spent"`
+}
+
+type CreateUserRequest struct {
+	Name          string `json:"name" binding:"required"`
+	Email         string `json:"email" binding:"required,email"`
+	Password      string `json:"password" binding:"required,min=6"`
+	Phone         string `json:"phone"`
+	EmailVerified bool   `json:"email_verified"`
 }
 
 type UpdateUserRequest struct {
@@ -369,6 +378,66 @@ func UpdateBookingStatus(c *gin.Context) {
 	}
 
 	response.OK(c, "status booking berhasil diupdate", gin.H{"booking_id": bookingID, "status": req.Status})
+}
+
+// POST /api/v1/admin/users
+func CreateUser(c *gin.Context) {
+	var req CreateUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "nama, email, dan password wajib diisi")
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	req.Email = normalizeEmail(req.Email)
+	req.Phone = strings.TrimSpace(req.Phone)
+	req.Password = strings.TrimSpace(req.Password)
+
+	if req.Name == "" {
+		response.BadRequest(c, "nama wajib diisi")
+		return
+	}
+	if req.Email == "" {
+		response.BadRequest(c, "email tidak valid")
+		return
+	}
+	if len(req.Password) < 6 {
+		response.BadRequest(c, "password minimal 6 karakter")
+		return
+	}
+
+	ctx := c.Request.Context()
+
+	fireUser, err := firebase.CreateUser(ctx, req.Email, req.Password, req.Name, req.EmailVerified)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": "gagal membuat user Firebase",
+			"error":   err.Error(),
+		})
+		return
+	}
+
+	var userID string
+	err = database.Pool.QueryRow(ctx, `
+		INSERT INTO users (firebase_uid, name, email, phone, email_verified, created_at)
+		VALUES ($1, $2, $3, $4, $5, NOW())
+		RETURNING id::text
+	`, fireUser.UID, req.Name, req.Email, req.Phone, req.EmailVerified).Scan(&userID)
+	if err != nil {
+		_ = firebase.DeleteUser(ctx, fireUser.UID)
+		response.InternalError(c, "gagal menyimpan user ke database")
+		return
+	}
+
+	response.Created(c, "user berhasil dibuat", gin.H{
+		"id":             userID,
+		"firebase_uid":   fireUser.UID,
+		"name":           req.Name,
+		"email":          fireUser.Email,
+		"phone":          req.Phone,
+		"email_verified": req.EmailVerified,
+	})
 }
 
 // GET /api/v1/admin/users/:id

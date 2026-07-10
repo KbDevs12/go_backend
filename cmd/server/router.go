@@ -35,7 +35,7 @@ func NewRouter() http.Handler {
 	r.POST("/api/v1/auth/admin-login", auth.AdminLogin)
 	r.GET("/api/v1/fields/availability", booking.GetAvailability)
 
-	// ── Customer (Bearer required) ────────────────────────────────
+	// ── Authenticated user/customer utilities (Bearer required) ─────────
 	customer := r.Group("/api/v1", middleware.Auth())
 	{
 		customer.POST("/auth/refresh", auth.RefreshLastSeen)
@@ -71,6 +71,7 @@ func NewRouter() http.Handler {
 		adm.GET("/reports/range", admin.RangeReport)
 		adm.GET("/notifications", admin.ListNotifications)
 		adm.GET("/users", admin.ListUsers)
+		adm.POST("/users", admin.CreateUser)
 		adm.GET("/users/:id", admin.GetUserDetail)
 		adm.PATCH("/users/:id", admin.UpdateUser)
 		adm.DELETE("/users/:id", admin.DeleteUser)
