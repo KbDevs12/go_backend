@@ -69,6 +69,7 @@ func NewRouter() http.Handler {
 		adm.POST("/payments/:booking_id/reject", payment.AdminRejectPayment)
 		adm.GET("/reports/daily", admin.DailyReport)
 		adm.GET("/reports/range", admin.RangeReport)
+		adm.GET("/reports/range/export", admin.RangeReportExportExcel)
 		adm.GET("/notifications", admin.ListNotifications)
 		adm.GET("/users", admin.ListUsers)
 		adm.POST("/users", admin.CreateUser)

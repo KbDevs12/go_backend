@@ -2,6 +2,7 @@ package admin
 
 import (
 	"fmt"
+	"html"
 	"math"
 	"net/http"
 	"strconv"
@@ -654,6 +655,124 @@ func RangeReport(c *gin.Context) {
 	}
 
 	response.OK(c, "laporan range berhasil diambil", result)
+}
+
+// GET /api/v1/admin/reports/range/export?from=2026-05-01&to=2026-05-31
+func RangeReportExportExcel(c *gin.Context) {
+	from := c.Query("from")
+	to := c.Query("to")
+	if from == "" || to == "" {
+		now := time.Now()
+		from = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC).Format("2006-01-02")
+		to = now.Format("2006-01-02")
+	}
+
+	startDate, err := time.Parse("2006-01-02", from)
+	if err != nil {
+		response.BadRequest(c, "format from tidak valid — gunakan YYYY-MM-DD")
+		return
+	}
+	endDate, err := time.Parse("2006-01-02", to)
+	if err != nil {
+		response.BadRequest(c, "format to tidak valid — gunakan YYYY-MM-DD")
+		return
+	}
+	if endDate.Before(startDate) {
+		response.BadRequest(c, "to harus setelah atau sama dengan from")
+		return
+	}
+
+	ctx := c.Request.Context()
+	var totalBookings, pendingBookings, paidBookings, cancelledBookings, completedBookings int
+	var totalRevenue int64
+	err = database.Pool.QueryRow(ctx, `
+        SELECT
+            COUNT(*)::int,
+            COUNT(*) FILTER (WHERE booking_status = 'pending_payment')::int,
+            COUNT(*) FILTER (WHERE payment_status IN ('paid','confirmed'))::int,
+            COUNT(*) FILTER (WHERE booking_status = 'cancelled')::int,
+            COUNT(*) FILTER (WHERE booking_status = 'completed')::int,
+            COALESCE(SUM(amount) FILTER (WHERE payment_status IN ('paid','confirmed')), 0)::bigint
+        FROM booking_detail
+        WHERE date BETWEEN $1 AND $2
+    `, from, to).Scan(
+		&totalBookings,
+		&pendingBookings,
+		&paidBookings,
+		&cancelledBookings,
+		&completedBookings,
+		&totalRevenue,
+	)
+	if err != nil {
+		response.InternalError(c, "gagal membuat ringkasan laporan excel")
+		return
+	}
+
+	rows, err := database.Pool.Query(ctx, `
+        SELECT
+            booking_id::text,
+            date::text,
+            start_time::text,
+            end_time::text,
+            COALESCE(customer_name, ''),
+            COALESCE(customer_email, ''),
+            COALESCE(customer_phone, ''),
+            COALESCE(field_name, ''),
+            COALESCE(field_type, ''),
+            COALESCE(amount, 0)::bigint,
+            COALESCE(payment_status, ''),
+            COALESCE(booking_status, ''),
+            booked_at::text,
+            COALESCE(payment_id::text, '')
+        FROM booking_detail
+        WHERE date BETWEEN $1 AND $2
+        ORDER BY date ASC, start_time ASC, booked_at ASC
+    `, from, to)
+	if err != nil {
+		response.InternalError(c, "gagal mengambil detail laporan excel")
+		return
+	}
+	defer rows.Close()
+
+	var b strings.Builder
+	b.WriteString("\ufeff")
+	b.WriteString(`<!doctype html><html><head><meta charset="utf-8"></head><body>`)
+	b.WriteString(`<table border="1">`)
+	b.WriteString(`<tr><th colspan="14" style="font-size:18px">Laporan Pemesanan Futsal Cahaya</th></tr>`)
+	b.WriteString(`<tr><td colspan="14">Periode: ` + html.EscapeString(from) + ` s/d ` + html.EscapeString(to) + `</td></tr>`)
+	b.WriteString(`<tr><td>Total Booking</td><td>` + strconv.Itoa(totalBookings) + `</td><td>Pending</td><td>` + strconv.Itoa(pendingBookings) + `</td><td>Paid/Confirmed</td><td>` + strconv.Itoa(paidBookings) + `</td><td>Cancelled</td><td>` + strconv.Itoa(cancelledBookings) + `</td><td>Completed</td><td>` + strconv.Itoa(completedBookings) + `</td><td>Total Revenue</td><td>` + strconv.FormatInt(totalRevenue, 10) + `</td><td colspan="2"></td></tr>`)
+	b.WriteString(`<tr><td colspan="14"></td></tr>`)
+	b.WriteString(`<tr>`)
+	headers := []string{"No", "Booking ID", "Tanggal", "Jam Mulai", "Jam Selesai", "Customer", "Email", "No HP", "Lapangan", "Tipe", "Nominal", "Status Pembayaran", "Status Booking", "Payment ID"}
+	for _, h := range headers {
+		b.WriteString(`<th>` + html.EscapeString(h) + `</th>`)
+	}
+	b.WriteString(`</tr>`)
+
+	no := 1
+	for rows.Next() {
+		var bookingID, date, startTime, endTime, customerName, customerEmail, customerPhone, fieldName, fieldType, paymentStatus, bookingStatus, bookedAt, paymentID string
+		var amount int64
+		if err := rows.Scan(&bookingID, &date, &startTime, &endTime, &customerName, &customerEmail, &customerPhone, &fieldName, &fieldType, &amount, &paymentStatus, &bookingStatus, &bookedAt, &paymentID); err != nil {
+			continue
+		}
+		values := []string{
+			strconv.Itoa(no), bookingID, date, startTime, endTime, customerName, customerEmail, customerPhone, fieldName, fieldType, strconv.FormatInt(amount, 10), paymentStatus, bookingStatus, paymentID,
+		}
+		b.WriteString(`<tr>`)
+		for _, v := range values {
+			b.WriteString(`<td>` + html.EscapeString(v) + `</td>`)
+		}
+		b.WriteString(`</tr>`)
+		no++
+	}
+	b.WriteString(`</table></body></html>`)
+
+	filename := fmt.Sprintf("laporan_futsal_%s_%s.xls", from, to)
+	c.Header("Content-Type", "application/vnd.ms-excel; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Header("Access-Control-Expose-Headers", "Content-Disposition")
+	c.String(http.StatusOK, b.String())
 }
 
 func validateDateAndTime(date, startTime, endTime string) error {
